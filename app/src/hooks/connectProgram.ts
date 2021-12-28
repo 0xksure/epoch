@@ -5,7 +5,7 @@ let programID = new anchor.web3.PublicKey(idl.metadata.address);
 let opts = {
     preflightCommitment: "processed",
 };
-import idl from "../../../target/idl/epoch2.json";
+import idl from "../../../target/idl/epoch.json";
 
 
 

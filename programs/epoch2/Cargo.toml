@@ -1,12 +1,12 @@
 [package]
-name = "epoch2"
+name = "epoch"
 version = "0.1.0"
 description = "Created with Anchor"
 edition = "2018"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "epoch2"
+name = "epoch"
 
 [features]
 no-entrypoint = []
