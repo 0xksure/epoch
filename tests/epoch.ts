@@ -7,23 +7,32 @@ import * as bs58 from "bs58";
 type EpochProgram = Program<Epoch>
 const { SystemProgram } = anchor.web3;
 
-async function createUser(program: EpochProgram, userAccount: anchor.web3.Keypair, provider: anchor.Provider): string {
-  const res = await program.rpc.createUser({
+async function createUser(program: EpochProgram, userAccount: anchor.web3.Keypair, provider: anchor.Provider): Promise<void> {
+  await program.rpc.createUser({
     accounts: {
       userAccount: userAccount.publicKey,
-      user: provider.wallet.publicKey,
+      authority: provider.wallet.publicKey,
       systemProgram: SystemProgram.programId,
     },
     signers: [userAccount],
   });
-  return res
 }
+async function createMessage(program: EpochProgram, messageAccount: anchor.web3.Keypair, provider: anchor.Provider): Promise<void> {
+  await program.rpc.sendMessage("cool", {
+    accounts: {
+      messageAccount: messageAccount.publicKey,
+      author: provider.wallet.publicKey,
+      systemProgram: SystemProgram.programId,
+    },
+    signers: [messageAccount],
+  })
+}
+
 
 describe('epoch', () => {
   const provider = anchor.Provider.env()
   // Configure the client to use the local cluster.
   anchor.setProvider(provider);
-  const myAccount = anchor.web3.Keypair.generate();
   const program = anchor.workspace.Epoch as EpochProgram;
 
   it("create user", async () => {
@@ -33,8 +42,7 @@ describe('epoch', () => {
     await createUser(program, newUserAccount, provider)
 
     let userAccount = await program.account.user.fetch(newUserAccount.publicKey);
-
-    assert.ok(userAccount.user.equals(provider.wallet.publicKey))
+    assert.ok(userAccount.authority.equals(provider.wallet.publicKey))
   })
   it("write message", async () => {
     const myAccount = anchor.web3.Keypair.generate();
@@ -48,9 +56,6 @@ describe('epoch', () => {
       signers: [myAccount],
     })
     const account = await program.account.message.fetch(myAccount.publicKey)
-    console.log("author: ", account.author)
-    console.log("content: ", account.content)
-    console.log("timestamp: ", account.timestamp)
     assert.ok(account.content === "cool")
 
     // filter on message type 
@@ -63,7 +68,6 @@ describe('epoch', () => {
       }
     ])
 
-    console.log("messages: ", dataMessages)
     // filter on publickey of author
     const data = await program.account.message.all([
       {
@@ -73,15 +77,12 @@ describe('epoch', () => {
         },
       }
     ])
-    console.log("messages: ", data)
     assert.equal(data.length, 1);
 
 
   })
   it("follow account", async () => {
     const followingTrackerAccount = anchor.web3.Keypair.generate();
-    const userAccount = anchor.web3.Keypair.generate();
-    await createUser(program, userAccount, provider)
     const accountToFollow = anchor.web3.Keypair.generate();
     await createUser(program, accountToFollow, provider)
 
@@ -93,6 +94,31 @@ describe('epoch', () => {
       },
       signers: [followingTrackerAccount],
     })
-    console.log("following result: ", following)
+  })
+  it("vote on a message", async () => {
+    // create a new message 
+    const newMessageAccount = anchor.web3.Keypair.generate()
+    await createMessage(program, newMessageAccount, provider)
+
+    const newUpVoteAccount = anchor.web3.Keypair.generate()
+    await program.rpc.upVote(newMessageAccount.publicKey, {
+      accounts: {
+        account: newUpVoteAccount.publicKey,
+        signer: provider.wallet.publicKey,
+        systemProgram: SystemProgram.programId
+      },
+      signers: [newUpVoteAccount]
+    })
+
+    // get up voted account 
+    const data = await program.account.upVoteAccount.all([
+      {
+        memcmp: {
+          offset: 8,
+          bytes: newMessageAccount.publicKey.toBase58()
+        }
+      }
+    ])
+    assert.equal(data.length, 1)
   })
 })

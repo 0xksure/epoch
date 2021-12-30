@@ -1,4 +1,6 @@
 use anchor_lang::prelude::*;
+use anchor_lang::AccountsClose;
+pub mod event;
 pub mod user;
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
@@ -6,22 +8,38 @@ declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 pub mod epoch {
     use super::*;
 
-    // create_user creates a new user account with the the signer as user
+    // create_user initializes a user in epoch
     pub fn create_user(ctx: Context<CreateUser>) -> ProgramResult {
         let user_account = &mut ctx.accounts.user_account;
-        user_account.user = *ctx.accounts.user.key;
+        user_account.authority = *ctx.accounts.authority.key;
+        emit!(event::EpochEvent::success_event("create user".to_string()));
         Ok(())
     }
 
     // follow_user allows user accounts to be linked
     pub fn follow_user(ctx: Context<FollowUser>, user_to_follow: Pubkey) -> ProgramResult {
         let following_account = &mut ctx.accounts.account;
-        let user = &ctx.accounts.user;
 
-        following_account.message_type = String::from("following");
-        following_account.user = *user.key;
-        following_account.following_user = user_to_follow;
+        following_account.epoch_type = String::from("following");
+        following_account.user = *ctx.accounts.user.key;
+        following_account.followed_user = user_to_follow;
         Ok(())
+    }
+
+    // up_vote allows users to vote on a message
+    pub fn up_vote(ctx: Context<UpVote>, message_account: Pubkey) -> ProgramResult {
+        let vote_account = &mut ctx.accounts.account;
+        vote_account.epoch_type = String::from("upVote");
+        vote_account.voter = *ctx.accounts.signer.key;
+        vote_account.message_account = message_account;
+        Ok(())
+    }
+
+    // close account when user downvotes
+    pub fn down_vote(ctx: Context<DownVote>) -> ProgramResult {
+        let vote_account = &mut ctx.accounts.account;
+        let voter = &ctx.accounts.voter;
+        return vote_account.close(voter.to_account_info());
     }
 
     // send_messages creates a message with the author as signer
@@ -36,39 +54,67 @@ pub mod epoch {
         message_account.author = *author.key;
         message_account.timestamp = clock.unix_timestamp;
         message_account.topic = String::from("unknown");
-        message_account.message_type = String::from("message");
+        message_account.epoch_type = String::from("message");
         Ok(())
     }
 }
 
 const DISCRIMINATOR_LENGTH: usize = 8;
 const PUBLIC_KEY_LENGTH: usize = 32;
-const EPOCH_TYPE_LENGTH_PREFIX: usize = 4; // Type of EPOCH
 const EPOCH_TYPE_LENGTH: usize = 50 * 4;
 const TIMESTAMP_LENGTH: usize = 8;
 const STRING_LENGTH_PREFIX: usize = 4; // Stores the size of the string.
 const MAX_TOPIC_LENGTH: usize = 50 * 4; // 50 chars max.
 const MAX_CONTENT_LENGTH: usize = 280 * 4; // 280 chars max.
+const DESCRIPTION_LENGTH: usize = 100 * 4; // 100 chars max
+const URL_LENGTH: usize = 30 * 4; // 30 chars max url
+const NAME_LENGTH: usize = 20 * 4; // 20 chars max name
+
+#[derive(Accounts)]
+pub struct UpVote<'info> {
+    #[account(init,payer=signer,space=VoteAccount::LEN)]
+    pub account: Account<'info, VoteAccount>,
+    pub signer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[account]
+pub struct VoteAccount {
+    pub message_account: Pubkey,
+    pub voter: Pubkey,
+    pub epoch_type: String,
+}
+
+#[derive(Accounts)]
+pub struct DownVote<'info> {
+    #[account(mut,has_one=voter,close = voter)]
+    pub account: Account<'info, VoteAccount>,
+    pub voter: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
 
 #[derive(Accounts)]
 pub struct CreateUser<'info> {
-    #[account(init, payer = user, space = 8 + 40)]
+    #[account(init, payer = authority, space = User::LEN)]
     pub user_account: Account<'info, User>,
     #[account(mut)]
-    pub user: Signer<'info>,
+    pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[account]
 pub struct User {
-    pub user: Pubkey,
+    pub authority: Pubkey,
+    pub name: String,
+    pub created: i64,
+    pub avatar: String,
+    pub description: String,
 }
 
 #[derive(Accounts)]
 pub struct FollowUser<'info> {
     #[account(init,payer=user,space=Following::LEN)]
     pub account: Account<'info, Following>,
-    #[account(mut)]
     pub user: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
@@ -76,15 +122,14 @@ pub struct FollowUser<'info> {
 #[account]
 pub struct Following {
     pub user: Pubkey,
-    pub message_type: String,
-    pub following_user: Pubkey,
+    pub epoch_type: String,
+    pub followed_user: Pubkey,
 }
 
 #[derive(Accounts)]
 pub struct SendMessage<'info> {
     #[account(init,payer=author,space = Message::LEN  )]
     pub message_account: Account<'info, Message>,
-    #[account(mut)]
     pub author: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
@@ -92,16 +137,36 @@ pub struct SendMessage<'info> {
 #[account]
 pub struct Message {
     pub author: Pubkey,
-    pub message_type: String,
+    pub epoch_type: String,
     pub timestamp: i64,
     pub topic: String,
     pub content: String,
 }
 
+impl User {
+    const LEN: usize = DISCRIMINATOR_LENGTH
+        + PUBLIC_KEY_LENGTH
+        + STRING_LENGTH_PREFIX
+        + NAME_LENGTH
+        + TIMESTAMP_LENGTH
+        + STRING_LENGTH_PREFIX
+        + URL_LENGTH
+        + STRING_LENGTH_PREFIX
+        + DESCRIPTION_LENGTH;
+}
+
+impl VoteAccount {
+    const LEN: usize = DISCRIMINATOR_LENGTH
+        + PUBLIC_KEY_LENGTH
+        + PUBLIC_KEY_LENGTH
+        + STRING_LENGTH_PREFIX
+        + EPOCH_TYPE_LENGTH;
+}
+
 impl Following {
     const LEN: usize = DISCRIMINATOR_LENGTH
         + PUBLIC_KEY_LENGTH
-        + EPOCH_TYPE_LENGTH_PREFIX
+        + STRING_LENGTH_PREFIX
         + EPOCH_TYPE_LENGTH
         + PUBLIC_KEY_LENGTH;
 }
@@ -109,11 +174,12 @@ impl Following {
 impl Message {
     const LEN: usize = DISCRIMINATOR_LENGTH
         + PUBLIC_KEY_LENGTH
-        + EPOCH_TYPE_LENGTH_PREFIX
+        + STRING_LENGTH_PREFIX
         + EPOCH_TYPE_LENGTH
         + TIMESTAMP_LENGTH
         + STRING_LENGTH_PREFIX
         + MAX_TOPIC_LENGTH
+        + STRING_LENGTH_PREFIX
         + MAX_CONTENT_LENGTH;
 }
 
