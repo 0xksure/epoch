@@ -111,7 +111,7 @@ describe('epoch', () => {
     })
 
     // get up voted account 
-    const data = await program.account.upVoteAccount.all([
+    const data = await program.account.voteAccount.all([
       {
         memcmp: {
           offset: 8,
@@ -120,5 +120,16 @@ describe('epoch', () => {
       }
     ])
     assert.equal(data.length, 1)
+    console.log("data: ", data)
+    const voteAccount = data[0]
+    // down vote the same post 
+    await program.rpc.downVote({
+      accounts: {
+        account: voteAccount.publicKey,
+        voter: provider.wallet.publicKey,
+        systemProgram: SystemProgram.programId,
+      }
+    })
+
   })
 })

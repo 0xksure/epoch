@@ -39,7 +39,9 @@ pub mod epoch {
     pub fn down_vote(ctx: Context<DownVote>) -> ProgramResult {
         let vote_account = &mut ctx.accounts.account;
         let voter = &ctx.accounts.voter;
-        return vote_account.close(voter.to_account_info());
+
+        //vote_account.close(voter.to_account_info())?;
+        Ok(())
     }
 
     // send_messages creates a message with the author as signer
@@ -78,6 +80,14 @@ pub struct UpVote<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct DownVote<'info> {
+    #[account(has_one=voter)]
+    pub account: Account<'info, VoteAccount>,
+    pub voter: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 #[account]
 pub struct VoteAccount {
     pub message_account: Pubkey,
@@ -86,11 +96,27 @@ pub struct VoteAccount {
 }
 
 #[derive(Accounts)]
-pub struct DownVote<'info> {
-    #[account(mut,has_one=voter,close = voter)]
-    pub account: Account<'info, VoteAccount>,
-    pub voter: Signer<'info>,
+pub struct CommentMessage<'info> {
+    #[account(init, payer=author,space=Comment::LEN)]
+    pub comment_account: Account<'info, Comment>,
+    pub author: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[account]
+pub struct Comment {
+    pub message: Pubkey,
+    pub author: Pubkey,
+    pub content: String,
+    pub created: i64,
+}
+
+impl Comment {
+    const LEN: usize = PUBLIC_KEY_LENGTH
+        + PUBLIC_KEY_LENGTH
+        + STRING_LENGTH_PREFIX
+        + MAX_CONTENT_LENGTH
+        + TIMESTAMP_LENGTH;
 }
 
 #[derive(Accounts)]
