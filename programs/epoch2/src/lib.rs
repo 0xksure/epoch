@@ -9,10 +9,21 @@ pub mod epoch {
     use super::*;
 
     // create_user initializes a user in epoch
-    pub fn create_user(ctx: Context<CreateUser>) -> ProgramResult {
+    pub fn create_user_account(ctx: Context<CreateUserAccount>,bump:u8) -> ProgramResult {
         let user_account = &mut ctx.accounts.user_account;
         user_account.authority = *ctx.accounts.authority.key;
+        user_account.bump = bump;
+        user_account.name=String::from("My name");
+
         emit!(event::EpochEvent::success_event("create user".to_string()));
+        
+        Ok(())
+    }
+
+    pub fn update_user_account(ctx: Context<UpdateUserAccount>,name: String) -> ProgramResult{
+        let user_account = &mut ctx.accounts.user_account;
+        user_account.name = name;
+        
         Ok(())
     }
 
@@ -21,16 +32,18 @@ pub mod epoch {
         let following_account = &mut ctx.accounts.account;
 
         following_account.epoch_type = String::from("following");
-        following_account.user = *ctx.accounts.user.key;
+        following_account.authority = *ctx.accounts.authority.key;
         following_account.followed_user = user_to_follow;
         Ok(())
     }
 
+   
+
     // up_vote allows users to vote on a message
-    pub fn up_vote(ctx: Context<UpVote>, message_account: Pubkey) -> ProgramResult {
+    pub fn up_vote(ctx: Context<UpVote>, message_account: Pubkey, bump: u8) -> ProgramResult {
         let vote_account = &mut ctx.accounts.account;
         vote_account.epoch_type = String::from("upVote");
-        vote_account.voter = *ctx.accounts.signer.key;
+        vote_account.authority = *ctx.accounts.authority.key;
         vote_account.message_account = message_account;
         Ok(())
     }
@@ -38,29 +51,35 @@ pub mod epoch {
     // close account when user downvotes
     pub fn down_vote(ctx: Context<DownVote>) -> ProgramResult {
         let vote_account = &mut ctx.accounts.account;
-        let voter = &ctx.accounts.voter;
-
-        //vote_account.close(voter.to_account_info())?;
+        vote_account.epoch_type = String::from("upVote");
         Ok(())
     }
 
     // send_messages creates a message with the author as signer
-    pub fn send_message(ctx: Context<SendMessage>, content: String) -> ProgramResult {
+    pub fn send_message(ctx: Context<SendMessage>,message: String, bump: u8) -> ProgramResult {
+        emit!(event::EpochEvent::success_event("Send message".to_string()));
         let message_account = &mut ctx.accounts.message_account;
-        let author: &Signer = &ctx.accounts.author;
+        let user_account = &mut ctx.accounts.user_account;
+        let author: &Signer = &ctx.accounts.authority;
         let clock: Clock = Clock::get().unwrap();
-        if content.chars().count() > 280 {
+        if message.chars().count() > 280 {
             return Err(ErrorCode::ContentTooLong.into());
         }
-        message_account.content = content;
-        message_account.author = *author.key;
+        // create the message account 
+        message_account.content = message;
+        message_account.authority = *author.key;
         message_account.timestamp = clock.unix_timestamp;
         message_account.topic = String::from("unknown");
         message_account.epoch_type = String::from("message");
+        message_account.bump = bump;
+        
+        // Increment the number of messages
+        user_account.message_count += 1;
         Ok(())
     }
 }
 
+const U8_LENGTH: usize = 1;
 const DISCRIMINATOR_LENGTH: usize = 8;
 const PUBLIC_KEY_LENGTH: usize = 32;
 const EPOCH_TYPE_LENGTH: usize = 50 * 4;
@@ -73,40 +92,65 @@ const URL_LENGTH: usize = 30 * 4; // 30 chars max url
 const NAME_LENGTH: usize = 20 * 4; // 20 chars max name
 
 #[derive(Accounts)]
+#[instruction(bump: u8)]
 pub struct UpVote<'info> {
-    #[account(init,payer=signer,space=VoteAccount::LEN)]
+    #[account(mut)]
+    pub message_account: Account<'info, Message>,
+    #[account(
+        init,
+        payer=authority,
+        seeds = [
+            b"epoch",
+            authority.key.as_ref(),
+            ],
+        bump = bump,
+        space=VoteAccount::LEN)]
     pub account: Account<'info, VoteAccount>,
-    pub signer: Signer<'info>,
+    pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct DownVote<'info> {
-    #[account(has_one=voter)]
+    #[account(mut,has_one=authority,close=authority)]
     pub account: Account<'info, VoteAccount>,
-    pub voter: Signer<'info>,
+    pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[account]
+#[derive(Default)]
 pub struct VoteAccount {
     pub message_account: Pubkey,
-    pub voter: Pubkey,
+    pub authority: Pubkey,
     pub epoch_type: String,
 }
 
 #[derive(Accounts)]
+#[instruction(bump: u8)]
 pub struct CommentMessage<'info> {
-    #[account(init, payer=author,space=Comment::LEN)]
+    #[account(mut)]
+    pub user_account: Account<'info,User>,
+    #[account(
+        init, 
+        payer=authority,
+        seeds = [
+            b"epoch",
+            user_account.key().as_ref(),
+            &[user_account.message_count as u8].as_ref()
+            ],
+        bump = user_account.bump,
+        space=Comment::LEN)]
     pub comment_account: Account<'info, Comment>,
-    pub author: Signer<'info>,
+    pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[account]
+#[derive(Default)]
 pub struct Comment {
     pub message: Pubkey,
-    pub author: Pubkey,
+    pub authority: Pubkey,
     pub content: String,
     pub created: i64,
 }
@@ -120,12 +164,32 @@ impl Comment {
 }
 
 #[derive(Accounts)]
-pub struct CreateUser<'info> {
-    #[account(init, payer = authority, space = User::LEN)]
+#[instruction(bump: u8)]
+pub struct CreateUserAccount<'info> {
+    #[account(
+        init, 
+        payer = authority, 
+        seeds = [
+            b"epoch",
+            authority.key.as_ref(),
+            ],
+        bump = bump,
+        space=User::LEN,
+    )]
     pub user_account: Account<'info, User>,
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateUserAccount<'info>{
+    #[account(mut, seeds = [
+        b"epoch",
+        user_account.authority.key().as_ref(),
+        ],bump=user_account.bump)]
+    pub user_account: Account<'info,User>,
+
 }
 
 #[account]
@@ -135,38 +199,61 @@ pub struct User {
     pub created: i64,
     pub avatar: String,
     pub description: String,
+    pub message_count: u8,
+    pub bump: u8,
 }
 
 #[derive(Accounts)]
 pub struct FollowUser<'info> {
-    #[account(init,payer=user,space=Following::LEN)]
+    #[account(init,payer=authority,space=Following::LEN)]
     pub account: Account<'info, Following>,
-    pub user: Signer<'info>,
+    pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[account]
 pub struct Following {
-    pub user: Pubkey,
+    pub authority: Pubkey,
     pub epoch_type: String,
     pub followed_user: Pubkey,
 }
 
 #[derive(Accounts)]
+#[instruction(message: String,bump: u8)]
 pub struct SendMessage<'info> {
-    #[account(init,payer=author,space = Message::LEN  )]
+    #[account(mut, seeds = [
+        b"epoch",
+        user_account.authority.key().as_ref(),
+        ],
+        bump=user_account.bump
+    )]
+    pub user_account: Account<'info,User>,
+    #[account(
+        init,
+        payer=authority,
+        seeds = [
+            b"epoch",
+            authority.key().as_ref(),
+            b"hello",
+        ],
+        bump = bump,
+        space = Message::LEN 
+    )]
     pub message_account: Account<'info, Message>,
-    pub author: Signer<'info>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[account]
+#[derive(Default)]
 pub struct Message {
-    pub author: Pubkey,
+    pub authority: Pubkey,
     pub epoch_type: String,
     pub timestamp: i64,
     pub topic: String,
     pub content: String,
+    pub bump: u8,
 }
 
 impl User {
@@ -178,7 +265,11 @@ impl User {
         + STRING_LENGTH_PREFIX
         + URL_LENGTH
         + STRING_LENGTH_PREFIX
-        + DESCRIPTION_LENGTH;
+        + DESCRIPTION_LENGTH
+        + STRING_LENGTH_PREFIX
+        + U8_LENGTH
+        + STRING_LENGTH_PREFIX
+        + U8_LENGTH;
 }
 
 impl VoteAccount {
@@ -206,7 +297,8 @@ impl Message {
         + STRING_LENGTH_PREFIX
         + MAX_TOPIC_LENGTH
         + STRING_LENGTH_PREFIX
-        + MAX_CONTENT_LENGTH;
+        + MAX_CONTENT_LENGTH
+        + U8_LENGTH;
 }
 
 #[error]
