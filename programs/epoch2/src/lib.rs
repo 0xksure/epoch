@@ -28,16 +28,17 @@ pub mod epoch {
     }
 
     // follow_user allows user accounts to be linked
-    pub fn follow_user(ctx: Context<FollowUser>, user_to_follow: Pubkey) -> ProgramResult {
+    pub fn follow_user(ctx: Context<FollowUser>,user_to_follow: Pubkey,bump:u8) -> ProgramResult {
         let following_account = &mut ctx.accounts.account;
 
         following_account.epoch_type = String::from("following");
         following_account.authority = *ctx.accounts.authority.key;
         following_account.followed_user = user_to_follow;
+        following_account.user_account = ctx.accounts.user_account.key();
+        following_account.bump = bump;
         Ok(())
     }
 
-   
 
     // up_vote allows users to vote on a message
     pub fn up_vote(ctx: Context<UpVote>, message_account: Pubkey, bump: u8) -> ProgramResult {
@@ -77,6 +78,8 @@ pub mod epoch {
         user_account.message_count += 1;
         Ok(())
     }
+
+
 }
 
 const U8_LENGTH: usize = 1;
@@ -204,9 +207,21 @@ pub struct User {
 }
 
 #[derive(Accounts)]
+#[instruction(user_to_follow: Pubkey,bump:u8)]
 pub struct FollowUser<'info> {
-    #[account(init,payer=authority,space=Following::LEN)]
+    pub user_account: Account<'info,User>,
+    #[account(
+        init,
+        payer=authority,
+        seeds= [
+            b"epoch",
+            user_to_follow.as_ref(),
+            authority.key.as_ref()
+        ],
+        bump=bump,
+        space=Following::LEN)]
     pub account: Account<'info, Following>,
+    #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
@@ -214,8 +229,10 @@ pub struct FollowUser<'info> {
 #[account]
 pub struct Following {
     pub authority: Pubkey,
+    pub user_account: Pubkey,
     pub epoch_type: String,
     pub followed_user: Pubkey,
+    pub bump: u8,
 }
 
 #[derive(Accounts)]
@@ -234,7 +251,7 @@ pub struct SendMessage<'info> {
         seeds = [
             b"epoch",
             authority.key().as_ref(),
-            b"hello",
+            message.as_ref(),
         ],
         bump = bump,
         space = Message::LEN 
@@ -283,9 +300,12 @@ impl VoteAccount {
 impl Following {
     const LEN: usize = DISCRIMINATOR_LENGTH
         + PUBLIC_KEY_LENGTH
+        + PUBLIC_KEY_LENGTH
         + STRING_LENGTH_PREFIX
         + EPOCH_TYPE_LENGTH
-        + PUBLIC_KEY_LENGTH;
+        + PUBLIC_KEY_LENGTH
+        + STRING_LENGTH_PREFIX
+        + U8_LENGTH;
 }
 
 impl Message {
@@ -298,6 +318,7 @@ impl Message {
         + MAX_TOPIC_LENGTH
         + STRING_LENGTH_PREFIX
         + MAX_CONTENT_LENGTH
+        + STRING_LENGTH_PREFIX
         + U8_LENGTH;
 }
 
